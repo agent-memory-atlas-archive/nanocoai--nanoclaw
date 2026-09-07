@@ -25,6 +25,14 @@ import {
   TIMEZONE,
 } from './config.js';
 import { CONTAINER_PLUGINS_DIR, materializeContainerJson } from './container-config.js';
+import { devInstructionMounts } from './code-mode/compose.js';
+import {
+  boundaryDecisionMounts,
+  deploymentPermissionMode,
+  managedSettingsMounts,
+  resolveCodePermissionMode,
+} from './code-mode/permissions.js';
+import { readEnvFile } from './env.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
 import { CONTAINER_RUNTIME_BIN } from './container-runtime.js';
@@ -194,6 +202,11 @@ export function isContainerRunning(sessionId: string): boolean {
 
 export function getContainerStartedAtMs(sessionId: string): number | undefined {
   return activeContainers.get(sessionId)?.startedAtMs;
+}
+
+/** Container name of a session's live runtime, if any — for host-mediated attach . */
+export function getActiveContainerName(sessionId: string): string | undefined {
+  return activeContainers.get(sessionId)?.containerName;
 }
 
 /**
@@ -783,10 +796,15 @@ export async function buildMounts(
   // Default agent surfaces (composed project doc, skill links, provider state
   // dir) apply unless the provider's registration declares it provides its own.
   const defaultSurfaces = !providerProvidesAgentSurfaces(provider);
+  // code mode strips chat COMPOSITION, not capabilities — the composed
+  // instructions, fragments, shared CLAUDE.md, chat skills and stamped plugin
+  // surfaces stay host-side; provider state (~/.claude: settings, credentials
+  // state) still mounts, because the coding agent is still a Claude session.
+  const chatSurfaces = defaultSurfaces && !containerConfig.codeMode;
 
   const groupDir = path.resolve(GROUPS_DIR, agentGroup.folder);
   const claudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
-  if (defaultSurfaces) {
+  if (chatSurfaces) {
     syncSkillSymlinks(claudeDir, containerConfig);
 
     // Compose CLAUDE.md fresh every spawn: every instruction source inlined
@@ -796,6 +814,8 @@ export async function buildMounts(
 
   const mounts: VolumeMount[] = [];
   const sessDir = sessionDir(agentGroup.id, session.id);
+  // The image WORKDIR must exist before Docker can create it as root.
+  fs.mkdirSync(path.join(sessDir, 'group'), { recursive: true });
   const scope = agentGroup.id;
 
   // Session workspace: mailbox-selected state plus outbox and heartbeat files.
@@ -817,15 +837,14 @@ export async function buildMounts(
     scope,
   });
 
-  // container.json — nested RO mount on top of RW group dir so the agent can
-  // read its config but cannot modify it. Composed per group, so 'group-state'
-  // read-only rather than 'install-surface': the install-surface rule is an
-  // enumerated release-surface allowlist, and this path is under the group.
+  // Kata-safe container config projection. A file hostPath nested over the RW
+  // group directory reads as empty inside the guest, including with subPath.
+  // Reuse the group directory at a non-overlapping RO path instead.
   const containerJsonPath = path.join(groupDir, 'container.json');
   if (fs.existsSync(containerJsonPath)) {
     mounts.push({
-      hostPath: containerJsonPath,
-      containerPath: '/workspace/agent/container.json',
+      hostPath: groupDir,
+      containerPath: '/run/nanoclaw/group-config',
       readonly: true,
       mountClass: 'group-state',
       scope,
@@ -842,19 +861,26 @@ export async function buildMounts(
   // whose read-only rule is enforced instead of chosen. It lives under the
   // group folder rather than an install root, so the mount policy pins it
   // through the group-folder label — see `stampedPluginsRoot`.
-  mounts.push({
-    hostPath: path.join(groupDir, 'plugins'),
-    containerPath: CONTAINER_PLUGINS_DIR,
-    readonly: true,
-    mountClass: 'install-surface',
-    scope,
-  });
+  //
+  // Gated on chatSurfaces : stamped plugins are chat-agent composition
+  // (skills, MCP servers, persona) — code mode strips them with the rest of
+  // the composed surface; plugin-data/ stays reachable through the group
+  // mount either way.
+  if (chatSurfaces) {
+    mounts.push({
+      hostPath: path.join(groupDir, 'plugins'),
+      containerPath: CONTAINER_PLUGINS_DIR,
+      readonly: true,
+      mountClass: 'install-surface',
+      scope,
+    });
+  }
 
   // The composed project document — one nested RO mount on top of the RW group
   // dir, holding the full text of every instruction source. `container/CLAUDE.md`
   // is read on the host at compose time, so nothing needs it inside the container.
   const composedClaudeMd = path.join(groupDir, 'CLAUDE.md');
-  if (defaultSurfaces && fs.existsSync(composedClaudeMd)) {
+  if (chatSurfaces && fs.existsSync(composedClaudeMd)) {
     mounts.push({
       hostPath: composedClaudeMd,
       containerPath: '/workspace/agent/CLAUDE.md',
@@ -862,6 +888,28 @@ export async function buildMounts(
       mountClass: 'group-state',
       scope,
     });
+  }
+
+  // Code-mode operating manual — the code runner starts the interactive CLI
+  // at /workspace/group, whose CLAUDE.md is the one instruction surface the
+  // D16 strip leaves. Host-stamped from the install tree and nested-RO-mounted
+  // over the RW session workspace (the container.json pattern), so the agent
+  // reads it but cannot edit it; the helper also creates the backing dir the
+  // runner's cwd needs (nothing else makes it exist host-side).
+  if (containerConfig.codeMode) {
+    mounts.push(...devInstructionMounts(sessDir, scope));
+    // Host-owned permission posture  — stamped per spawn, RO-mounted
+    // at the CLI's admin policy tier; group override wins over the deployment.
+    mounts.push(
+      ...managedSettingsMounts(
+        sessDir,
+        scope,
+        resolveCodePermissionMode(containerConfig.codePermissionMode, deploymentPermissionMode()),
+      ),
+    );
+    // D17 decision channel — host-writes-only by nested RO mount, so the
+    // boundary hook polls a dir the agent cannot forge into.
+    mounts.push(...boundaryDecisionMounts(sessDir, scope));
   }
 
   // Per-group .claude-shared at /home/node/.claude (provider state, settings,
@@ -887,8 +935,10 @@ export async function buildMounts(
   });
 
   // Shared skills — read-only, symlinks in .claude-shared/skills/ point here.
+  // Chat skills are composition, not capability : code mode doesn't mount
+  // them — dev skills arrive workspace-installed by their own route .
   const skillsSrc = path.join(projectRoot, 'container', 'skills');
-  if (fs.existsSync(skillsSrc)) {
+  if (chatSurfaces && fs.existsSync(skillsSrc)) {
     mounts.push({
       hostPath: skillsSrc,
       containerPath: '/app/skills',
@@ -979,6 +1029,55 @@ export function composeSessionSpec(input: ComposeSessionSpecInput): SessionSpec 
     ...(gateway.env ?? {}),
   };
 
+  // Trusted runners read the host-authored config through the non-overlapping
+  // read-only alias above, never through the agent-writable group path.
+  env.NANOCLAW_CONTAINER_JSON = '/run/nanoclaw/group-config/container.json';
+
+  // Forward the documented code-mode configuration. The gateway provider
+  // owns credential placeholders; generic extra env never enters that lane.
+  if (containerConfig.codeMode) {
+    if (containerConfig.provider && containerConfig.provider !== 'claude') {
+      throw new Error('code mode currently supports only Claude Code; set the group provider to claude');
+    }
+    const settings = [
+      'NANOCLAW_CODE_IDLE_TTL_MS',
+      'NANOCLAW_CODE_ATTACH_IDLE_TTL_MS',
+      'NANOCLAW_CODE_PERMISSION_MODE',
+      'NANOCLAW_CODE_ENV',
+    ] as const;
+    const fromFile = readEnvFile([...settings]);
+    const setting = (name: (typeof settings)[number]): string | undefined =>
+      process.env[name]?.trim() || fromFile[name]?.trim() || undefined;
+    for (const name of settings) {
+      if (name === 'NANOCLAW_CODE_ENV') continue;
+      const value =
+        name === 'NANOCLAW_CODE_PERMISSION_MODE'
+          ? (containerConfig.codePermissionMode ?? setting(name))
+          : setting(name);
+      if (value) env[name] = value;
+    }
+    const extra = setting('NANOCLAW_CODE_ENV');
+    if (extra) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(extra);
+      } catch {
+        throw new Error('NANOCLAW_CODE_ENV must be valid JSON');
+      }
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        Object.values(parsed).some((value) => typeof value !== 'string')
+      ) {
+        throw new Error('NANOCLAW_CODE_ENV must be a JSON object of strings');
+      }
+      for (const [key, value] of Object.entries(parsed as Record<string, string>)) {
+        if (!(key in env)) env[key] = value;
+      }
+    }
+  }
+
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   // The spec contract (drivers/types.ts, `runAs`): the identity that must read
@@ -1002,13 +1101,16 @@ export function composeSessionSpec(input: ComposeSessionSpecInput): SessionSpec 
     env,
     // Run the v2 entry point directly (no tsc, no stdin). The driver maps the
     // 'standard' posture's PID-1 requirement onto this: Docker adds `--init`.
+    // Runner-type selection happens HERE and nowhere else : both runners
+    // ride the same image and the same /app/src mount; a code-mode group gets
+    // the code runner's entrypoint, the chat runner stays untouched.
     command: ['bash', '-c'],
-    args: ['exec bun run /app/src/index.ts'],
+    args: [containerConfig.codeMode ? 'exec bun run /app/src/code-runner/index.ts' : 'exec bun run /app/src/index.ts'],
     mounts: mergeMounts(toMountSpecs(mounts, agentGroup.id), gateway.mounts ?? []),
     contributedEnv,
   };
 
-  // The folder label (D9) rides the spec so an admission-side check can pin
+  // The folder label  rides the spec so an admission-side check can pin
   // the `groups/<folder>` mount subtree to the session that carries it — the
   // id→folder mapping lives only in the central DB, which no admission-side
   // check can read. It is VERBATIM by contract, deliberately the opposite of

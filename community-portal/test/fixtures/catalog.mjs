@@ -1,0 +1,9 @@
+// No live partner API or commercial allowance is asserted by these fixtures.
+export function catalog(mode = 'simulated', { accountMode = mode === 'simulated' ? 'simulated' : 'existing' } = {}) {
+  return [
+    { id: 'echo', name: 'Echo', kind: 'account', category: 'Security', headline: 'A hardened home for your agent', description: 'Opt in to Echo’s hardened image for your NanoClaw agent.', allowance: 'Hardened agent image', mode: accountMode, enabled: false },
+    { id: 'slack', name: 'Slack', kind: 'account', category: 'Messaging', headline: 'Your agents, in your workspace', description: 'Connect your workspace and bring your agent into Slack.', allowance: 'Managed Slack agents', mode: accountMode, enabled: false },
+    { id: 'tavily', name: 'Tavily', category: 'Search', headline: 'Give your agent a view of the web', description: 'Let your agent search the web and retrieve the information it needs.', allowance: '1,000 test credits', credits: 1000, termDays: 30, deviceCap: 2, resourceType: 'search-key', termsVersion: 'demo-2026-09-05', termsText: 'This demonstration provisions a simulated Tavily key. No Tavily account is created, no live searches run, and no real credits are granted. You allow this test credential to be delivered to your connected devices.', mode, enabled: mode === 'simulated' },
+    { id: 'dial', name: 'Dial', category: 'Phone', headline: 'A phone number for your agent', description: 'Give your agent a number for calls and messages. Try a test number today.', allowance: 'One test number per device', credits: 100, termDays: 30, deviceCap: 2, resourceType: 'phone-number', termsVersion: 'demo-2026-09-05', termsText: 'This demonstration assigns a fictional Dial phone number and a simulated access credential. No Dial account is created, no real number is reserved, and no calls can be made. You allow this test credential to be delivered to your connected devices.', mode, enabled: mode === 'simulated' },
+  ];
+}

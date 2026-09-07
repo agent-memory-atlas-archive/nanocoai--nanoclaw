@@ -35,6 +35,12 @@ import {
   getContainerConfig,
   createContainerConfig,
 } from './index.js';
+import {
+  DOOR_SYSTEM_THREAD_ID,
+  findAttachableSessions,
+  findDoorSessions,
+  findSessionByAgentGroup,
+} from './sessions.js';
 
 function now() {
   return new Date().toISOString();
@@ -394,6 +400,23 @@ describe('sessions', () => {
     await createSession(sess());
     await deleteSession('sess-1');
     expect(await getSession('sess-1')).toBeUndefined();
+  });
+
+  it('door sessions: found by the scoped query, appended to the attach view', async () => {
+    await createSession({ ...sess(), id: 'sess-door', messaging_group_id: null, thread_id: DOOR_SYSTEM_THREAD_ID });
+    await createSession(sess()); // channel-wired
+    expect((await findDoorSessions('ag-1')).map((s) => s.id)).toEqual(['sess-door']);
+    // The channel-wired session keeps winning the wake choice (index 0);
+    // the door session is appended, never mixed in.
+    expect((await findAttachableSessions('ag-1')).map((s) => s.id)).toEqual(['sess-1', 'sess-door']);
+  });
+
+  it('door sessions: invisible to chat routing (agent-shared resolution)', async () => {
+    await createSession({ ...sess(), id: 'sess-door', messaging_group_id: null, thread_id: DOOR_SYSTEM_THREAD_ID });
+    // A door-only group must attach, yet look sessionless to resolveSession's
+    // agent-shared path — the composed-query pattern keeps the filter intact.
+    expect(await findSessionByAgentGroup('ag-1')).toBeUndefined();
+    expect((await findAttachableSessions('ag-1')).map((s) => s.id)).toEqual(['sess-door']);
   });
 });
 

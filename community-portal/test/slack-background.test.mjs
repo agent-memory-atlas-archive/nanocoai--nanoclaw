@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { harness } from './harness.mjs';
+import { SetupClient } from '../device/setup-client.mjs';
+
+test('activation releases setup immediately; Slack progress survives the browser link and stays private', async t => {
+  const h = await harness({ withCell: false }); t.after(() => h.close());
+  const client = await new SetupClient({ origin: h.origin, file: path.join(h.dir, 'auto.json'), autoContinue: true }).initialize();
+  t.after(() => client.stop());
+  const echo = await client.start('echo');
+  const enabled = await h.browser('/activations/echo', { method: 'POST', body: { accepted: true, setupCode: echo.code } });
+  assert.equal(enabled.status, 200);
+  assert.equal((await client.wait()).status, 'approved');
+  assert.ok(client.token, 'credential delivered without the Return button');
+  await client.complete();
+  const slack = await client.start('slack', 'Nova');
+  await h.browser('/slack/connect', { method: 'POST', body: { accepted: true } });
+  const selected = await h.browser('/activations/slack', { method: 'POST', body: { accepted: true, setupCode: slack.code, workspaceId: 'TDEMO' } });
+  assert.equal(selected.status, 200);
+  const choice = await client.wait();
+  const progress = status => client.request('POST', '/api/v1/device/slack', { appId: 'ADEMO2', setupId: choice.id, status });
+  await progress('awaiting_approval');
+  await h.app.service.change('acct_demo', a => { delete a.setups[choice.id]; return { type: 'test.expired' }; });
+  await progress('installing'); await progress('complete');
+  const state = await client.request('GET', '/api/v1/device/state');
+  assert.equal(state.devices.find(d => d.id === client.local.deviceId).slack.status, 'complete');
+  assert.ok(!JSON.stringify(state).includes(client.token));
+  const anonymous = await fetch(`${h.origin}/api/v1/device/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ appId: 'ADEMO2', status: 'complete' }) });
+  assert.equal(anonymous.status, 401);
+  await assert.rejects(client.request('POST', '/api/v1/device/slack', { appId: 'ANOTHER', status: 'complete' }), /Start Slack|not available/);
+});

@@ -1,9 +1,9 @@
-// host-integration/setup/portal-runtime.ts
+// ../setup/portal-runtime.ts
 import path2 from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { CellConnection, DeviceClient, readJson, processLock as processLock3 } from "./portal-client.mjs";
+import { CellConnection, DeviceClient, NanocodeHost, readJson, processLock as processLock3 } from "./portal-client.mjs";
 
-// host-integration/setup/slack-job.ts
+// ../setup/slack-job.ts
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -55,7 +55,7 @@ async function launchSlackJob(root = process.cwd()) {
   return true;
 }
 
-// host-integration/setup/portal-runtime.ts
+// ../setup/portal-runtime.ts
 function startPortalRuntime({
   root = process.cwd(),
   signal,
@@ -66,6 +66,7 @@ function startPortalRuntime({
   const abort = new AbortController();
   const file = path2.join(root, "data/community-portal.json");
   let connection;
+  let codeHost;
   let identity;
   let rejected = false;
   let release = null;
@@ -81,6 +82,7 @@ function startPortalRuntime({
     if (!rejected) log({ event: "sign_in_required" });
     rejected = true;
     dirty = true;
+    codeHost?.stop();
     connection?.stop();
     wake();
   };
@@ -89,6 +91,8 @@ function startPortalRuntime({
     if (!release || stopped) return;
     const local = await readJson(file);
     if (local?.registryAccount?.token && (!local.installId || local.installId !== local.registryAccount.install_id || !local.deviceId || !local.privateKey || !local.origin)) {
+      codeHost?.stop();
+      codeHost = void 0;
       connection?.stop();
       connection = void 0;
       identity = void 0;
@@ -102,6 +106,8 @@ function startPortalRuntime({
       registryAccount: local.registryAccount
     } : void 0;
     if (!isDeepStrictEqual(current, identity)) {
+      codeHost?.stop();
+      codeHost = void 0;
       connection?.stop();
       connection = void 0;
       identity = current;
@@ -115,6 +121,7 @@ function startPortalRuntime({
           signal: abort.signal
         });
         proof.local = current;
+        codeHost = new NanocodeHost({ root, client: proof, send: (frame) => connection?.send(frame), log });
         connection = new CellConnection({
           origin: proof.origin,
           getTicket: async (requestSignal) => {
@@ -125,6 +132,10 @@ function startPortalRuntime({
               throw error;
             }
           },
+          onMessage: (message) => {
+            void codeHost?.message(message);
+          },
+          onDisconnect: () => codeHost?.disconnect(),
           onChange: () => {
             dirty = true;
             wake();
@@ -135,6 +146,7 @@ function startPortalRuntime({
       }
     }
     if (!current || stopped) return;
+    if (!rejected) await codeHost?.ensure();
     const job = await readSlackJob(root);
     if (!rejected && job && job.identity.deviceId === current.deviceId && job.identity.registryAccount?.install_id === current.installId && job.identity.registryAccount?.account_id === current.registryAccount.account_id && job.origin === current.origin) {
       if (await launchSlackJob(root)) log({ event: "slack_install_resumed", deviceId: current.deviceId });
@@ -166,6 +178,7 @@ function startPortalRuntime({
       if (error.code === "journal_busy") return;
       if (denied(error)) {
         rejectIdentity();
+        codeHost?.stop();
         if (client.local) {
           client.local.credentials = {};
           client.local.operations = {};
@@ -207,6 +220,7 @@ function startPortalRuntime({
     abort.abort();
     clearInterval(timer);
     connection?.stop();
+    codeHost?.stop();
     signal?.removeEventListener("abort", onAbort);
     stopping = (async () => {
       await pending;

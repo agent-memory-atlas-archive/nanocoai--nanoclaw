@@ -1,0 +1,13 @@
+import { readJson } from '../device/client.mjs';
+const perk = process.argv[2] || 'tavily';
+if (!['tavily', 'dial'].includes(perk)) throw new Error('Choose tavily or dial.');
+const config = await readJson(new URL('../.runtime/demo.json', import.meta.url));
+const device = await readJson(new URL(`../.runtime/devices/${process.argv.includes('--setup-device') ? 'setup-device' : 'demo-device'}.json`, import.meta.url));
+const secret = device?.credentials?.[perk]?.secret;
+if (!secret) throw new Error(`Claim ${perk} in the running demo first.`);
+const origin = new URL(config.origin);
+if (origin.hostname !== '127.0.0.1') throw new Error('This command only calls the local simulator.');
+origin.port = String(Number(origin.port) + 2);
+const response = await fetch(`${origin.origin}/${perk}/use`, { headers: { authorization: `Bearer ${secret}` }, signal: AbortSignal.timeout(3000) });
+console.log(JSON.stringify(await response.json(), null, 2));
+if (!response.ok) process.exitCode = 1;

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Manage NanoClaw partner perks and the devices that use them.">
+  <title>Perks · NanoClaw</title>
+  <link rel="icon" type="image/svg+xml" href="/mark.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body class="signed-out">
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="shell">
+    <aside class="sidebar" hidden>
+      <a class="brand" href="/" aria-label="NanoClaw home"><img src="/logos/nanoclaw.svg" alt="NanoClaw" width="166" height="25"></a>
+      <p class="account-label">Your account</p>
+      <nav aria-label="Account navigation">
+        <button data-tab="perks" class="selected"><span aria-hidden="true">✦</span> Perks</button>
+        <button data-tab="nanocode"><span aria-hidden="true">⌘</span> Code mode</button>
+        <button data-tab="devices"><span aria-hidden="true">▣</span> Devices</button>
+        <button data-tab="activity"><span aria-hidden="true">◷</span> Activity</button>
+      </nav>
+      <div class="sidebar-bottom"><img class="avatar" src="/mark.svg" alt="" width="32" height="32"><div><strong id="member">NanoClaw member</strong><small id="connection">Connecting…</small></div><button id="logout" class="icon-button" aria-label="Sign out" hidden>↗</button></div>
+    </aside>
+    <div class="content">
+      <header class="public-header" id="public-header"><a class="brand" href="/" aria-label="NanoClaw home"><img src="/logos/nanoclaw.svg" alt="NanoClaw" width="166" height="25"></a></header>
+      <section id="setup-panel" class="setup-panel" aria-label="CLI setup" hidden></section>
+      <main id="main" tabindex="-1"><p class="loading">Opening your account…</p></main>
+      <footer>Made for agents. Managed by you.<span>NanoClaw community</span></footer>
+    </div>
+  </div>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <dialog id="activation-dialog" aria-labelledby="activation-title"></dialog>
+
+  <dialog id="revoke-dialog" aria-labelledby="revoke-title">
+    <div class="dialog-heading"><h2 id="revoke-title">Remove perk?</h2><button type="button" class="icon-button" data-close aria-label="Close">×</button></div>
+    <p id="revoke-description"></p><p class="muted">The provider revokes access, and connected devices remove their local credential. You can enable the perk again afterward.</p>
+    <div class="dialog-actions"><button class="secondary" data-close>Keep perk</button><button class="danger" id="confirm-revoke">Remove perk</button></div>
+  </dialog>
+  <dialog id="slack-dialog" aria-labelledby="slack-title">
+    <div class="dialog-heading"><h2 id="slack-title"></h2><button type="button" class="icon-button" data-close aria-label="Close">×</button></div>
+    <p id="slack-description"></p>
+    <div class="dialog-actions"><button class="secondary" data-close>Cancel</button><button class="primary" id="slack-confirm">Continue</button></div>
+  </dialog>
+</body>
+</html>

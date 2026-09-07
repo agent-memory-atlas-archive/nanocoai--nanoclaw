@@ -96,7 +96,7 @@ describe('buildMounts against the policy the drivers enforce', () => {
       expect.arrayContaining([
         '/workspace',
         '/workspace/agent',
-        '/workspace/agent/container.json',
+        '/run/nanoclaw/group-config',
         '/workspace/agent/plugins',
         '/workspace/agent/CLAUDE.md',
         '/home/node/.claude',

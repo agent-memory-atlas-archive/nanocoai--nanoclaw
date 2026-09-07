@@ -1,0 +1,9 @@
+{
+  "name": "nanoclaw-community",
+  "main": "worker/src/index.mjs",
+  "compatibility_date": "2026-01-01",
+  "assets": { "directory": "web", "binding": "ASSETS" },
+  "vars": { "GRANT_PUBLIC_KEY_JWK": "", "GRANT_PUBLIC_KEY_SPKI": "" },
+  "durable_objects": { "bindings": [{ "name": "ACCOUNTS", "class_name": "AccountCell" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountCell"] }]
+}

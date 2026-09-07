@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { CellConnection, DeviceClient, readJson, processLock } from './portal-client.mjs';
+import { CellConnection, DeviceClient, NanocodeHost, readJson, processLock } from './portal-client.mjs';
 import { launchSlackJob, readSlackJob } from './slack-job.js';
 
 export interface PortalRuntimeOptions {
@@ -21,6 +21,7 @@ export function startPortalRuntime({
   const abort = new AbortController();
   const file = path.join(root, 'data/community-portal.json');
   let connection: CellConnection | undefined;
+  let codeHost: NanocodeHost | undefined;
   let identity: unknown;
   let rejected = false;
   let release: (() => void) | null = null;
@@ -36,6 +37,7 @@ export function startPortalRuntime({
     if (!rejected) log({ event: 'sign_in_required' });
     rejected = true;
     dirty = true;
+    codeHost?.stop();
     connection?.stop();
     wake();
   };
@@ -53,6 +55,8 @@ export function startPortalRuntime({
         !local.privateKey ||
         !local.origin)
     ) {
+      codeHost?.stop();
+      codeHost = undefined;
       connection?.stop();
       connection = undefined;
       identity = undefined;
@@ -69,6 +73,8 @@ export function startPortalRuntime({
           }
         : undefined;
     if (!isDeepStrictEqual(current, identity)) {
+      codeHost?.stop();
+      codeHost = undefined;
       connection?.stop();
       connection = undefined;
       identity = current;
@@ -82,6 +88,7 @@ export function startPortalRuntime({
           signal: abort.signal,
         });
         proof.local = current;
+        codeHost = new NanocodeHost({ root, client: proof, send: (frame) => connection?.send(frame), log });
         connection = new CellConnection({
           origin: proof.origin,
           getTicket: async (requestSignal) => {
@@ -92,6 +99,10 @@ export function startPortalRuntime({
               throw error;
             }
           },
+          onMessage: (message) => {
+            void codeHost?.message(message);
+          },
+          onDisconnect: () => codeHost?.disconnect(),
           onChange: () => {
             dirty = true;
             wake();
@@ -102,6 +113,7 @@ export function startPortalRuntime({
       }
     }
     if (!current || stopped) return;
+    if (!rejected) await codeHost?.ensure();
     const job = await readSlackJob(root);
     // Supervise only the saved installation bound to this account/checkout.
     // A live worker keeps its existing approval polling; no duplicate spawns.
@@ -143,6 +155,7 @@ export function startPortalRuntime({
       if (error.code === 'journal_busy') return;
       if (denied(error)) {
         rejectIdentity();
+        codeHost?.stop();
         if (client.local) {
           client.local.credentials = {};
           client.local.operations = {};
@@ -187,6 +200,7 @@ export function startPortalRuntime({
     abort.abort();
     clearInterval(timer);
     connection?.stop();
+    codeHost?.stop();
     signal?.removeEventListener('abort', onAbort);
     stopping = (async () => {
       await pending;

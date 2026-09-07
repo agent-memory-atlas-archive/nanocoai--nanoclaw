@@ -39,13 +39,37 @@ jobs:
 
       - name: Container tests
         working-directory: container/agent-runner
-        run: bun test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          bun test
+
+  portal:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: community-portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: community-portal/package-lock.json
+      - run: npm ci
+      - run: npm run build:host
+      - name: Verify checked-in client bundles
+        run: git diff --exit-code -- ../setup
+      - run: npm run build
+      - run: npm test
+      - run: npm run celld:install
+      - run: npm run test:e2e
 
   # Repository rules require exact `ci`; always run it so matrix failures remain blocking.
   ci:
     if: always()
-    needs: test
+    needs: [test, portal]
     permissions: {}
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.portal.result }}" = success

@@ -2270,7 +2270,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes3, createHash: createHash2 } = __require("crypto");
+    var { randomBytes: randomBytes3, createHash: createHash3 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -2938,7 +2938,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -3307,7 +3307,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash2 } = __require("crypto");
+    var { createHash: createHash3 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -3614,7 +3614,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -3709,14 +3709,24 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 // service/security.mjs
 import { createHash, randomBytes, createPrivateKey, createPublicKey, sign, verify, timingSafeEqual } from "node:crypto";
+var HttpError = class extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+};
+var fail = (status, code, message) => {
+  throw new HttpError(status, code, message);
+};
 var random = (bytes = 24) => randomBytes(bytes).toString("base64url");
 var hash = (value) => createHash("sha256").update(value).digest("hex");
-function proofText(method, path3, body, timestamp, nonce) {
-  return ["nanoclaw-perks-device-v1", method, path3, hash(body), timestamp, nonce].join("\n");
+function proofText(method, path4, body, timestamp, nonce) {
+  return ["nanoclaw-perks-device-v1", method, path4, hash(body), timestamp, nonce].join("\n");
 }
-function deviceProof(privateKey, method, path3, body = "") {
+function deviceProof(privateKey, method, path4, body = "") {
   const timestamp = String(Date.now()), nonce = random(16);
-  const signature = sign("sha256", Buffer.from(proofText(method, path3, body, timestamp, nonce)), {
+  const signature = sign("sha256", Buffer.from(proofText(method, path4, body, timestamp, nonce)), {
     key: createPrivateKey({ key: privateKey, format: "jwk" }),
     dsaEncoding: "ieee-p1363"
   }).toString("base64url");
@@ -3817,9 +3827,11 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 // device/connection.mjs
 var CellConnection = class {
   constructor({ origin, getTicket, onChange = () => {
+  }, onMessage = () => {
+  }, onDisconnect = () => {
   }, log = () => {
   }, heartbeatMs = 2e4, timeoutMs = 6e4, retryMs = 1e3, maxRetryMs = 3e4 }) {
-    Object.assign(this, { origin, getTicket, onChange, log, heartbeatMs, timeoutMs, retryMs, maxRetryMs });
+    Object.assign(this, { origin, getTicket, onChange, onMessage, onDisconnect, log, heartbeatMs, timeoutMs, retryMs, maxRetryMs });
     this.stopped = true;
     this.connected = false;
     this.attempt = 0;
@@ -3843,7 +3855,7 @@ var CellConnection = class {
     if (this.stopped || this.connecting || this.socket) return;
     this.connecting = true;
     try {
-      const { ticket, socketUrl } = await this.getTicket(this.abort.signal);
+      const { ticket, socketUrl, expiresIn = 900 } = await this.getTicket(this.abort.signal);
       if (this.stopped) return;
       const url = new URL(socketUrl);
       if (url.origin !== this.origin.replace(/^http/, "ws") || url.pathname !== "/cell/link" || url.search || url.hash || url.username || url.password) throw new Error("invalid_cell_url");
@@ -3858,12 +3870,14 @@ var CellConnection = class {
         this.lastPong = Date.now();
         this.log({ event: "connected" });
         this.onChange();
+        this.renewTimer = setInterval(() => void this.renew(), Math.max(500, (expiresIn - Math.min(60, expiresIn / 2)) * 1e3));
       });
       socket.on("message", (raw) => {
         try {
           const message = JSON.parse(String(raw));
           if (message.type === "pong") this.lastPong = Date.now();
           else if (["snapshot", "perks.changed"].includes(message.type)) this.onChange();
+          else if (message.type?.startsWith("ssh.")) this.onMessage(message);
         } catch {
         }
       });
@@ -3872,6 +3886,8 @@ var CellConnection = class {
       socket.once("close", () => {
         if (this.socket !== socket) return;
         this.socket = void 0;
+        clearInterval(this.renewTimer);
+        this.onDisconnect();
         if (this.connected) this.log({ event: "disconnected" });
         this.connected = false;
         this.retry();
@@ -3885,6 +3901,22 @@ var CellConnection = class {
       this.connecting = false;
     }
   }
+  send(frame) {
+    if (this.socket?.readyState === import_websocket.default.OPEN) this.socket.send(JSON.stringify(frame));
+  }
+  async renew() {
+    if (this.renewing || this.stopped) return;
+    this.renewing = true;
+    const socket = this.socket;
+    try {
+      const { ticket } = await this.getTicket(this.abort.signal);
+      if (this.socket === socket) this.send({ type: "auth.renew", ticket });
+    } catch {
+      socket?.terminate();
+    } finally {
+      this.renewing = false;
+    }
+  }
   retry() {
     if (this.stopped) return;
     clearTimeout(this.reconnect);
@@ -3895,7 +3927,9 @@ var CellConnection = class {
     this.stopped = true;
     this.abort?.abort();
     clearInterval(this.heartbeat);
+    clearInterval(this.renewTimer);
     clearTimeout(this.reconnect);
+    this.onDisconnect();
     this.socket?.terminate();
     this.socket = void 0;
     this.connected = false;
@@ -4076,7 +4110,7 @@ var DeviceClient = class {
   }
 };
 
-// ../../terraform/accounts/modules/nanoclaw-registry/lambda/broker/install-envelope.mjs
+// protocol/install-envelope.mjs
 import { createCipheriv, createDecipheriv, createPrivateKey as createPrivateKey2, createPublicKey as createPublicKey2, diffieHellman, generateKeyPairSync as generateKeyPairSync2, hkdfSync, randomBytes as randomBytes2 } from "node:crypto";
 function wrappingKey(jwk) {
   if (jwk?.kty !== "OKP" || jwk.crv !== "X25519" || jwk.d || !/^[\w-]{43}$/.test(jwk.x || "")) throw new Error("Invalid installation wrapping key");
@@ -4097,6 +4131,239 @@ function openInstall(privateJwk, expectedContext, envelope) {
   decipher.setAuthTag(Buffer.from(envelope.tag, "base64url"));
   return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, "base64url")), decipher.final()]).toString());
 }
+
+// device/nanocode-host.mjs
+import { readFile as readFile2, writeFile, rename as rename2, unlink } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { connect } from "node:net";
+import path3 from "node:path";
+
+// worker/src/ssh-relay.mjs
+var CHUNK = 16384;
+var WINDOW = 65536;
+function dataSize(value) {
+  if (typeof value !== "string" || value.length > 4 * Math.ceil(CHUNK / 3) || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw new Error("invalid_data");
+  const size = atob(value).length;
+  if (!size || size > CHUNK) throw new Error("invalid_data");
+  return size;
+}
+
+// device/ssh-stream.mjs
+var SshStream = class {
+  constructor({ readable, writable, send, close }) {
+    Object.assign(this, { readable, writable, send, close });
+    this.sent = this.acked = this.received = this.delivered = 0;
+    this.done = false;
+    this.pump = () => {
+      if (this.done) return;
+      while (readable.readableLength && this.sent - this.acked < WINDOW) {
+        const bytes = readable.read(Math.min(readable.readableLength, CHUNK, WINDOW - this.sent + this.acked));
+        if (!bytes) break;
+        send({ type: "ssh.data", seq: this.sent, data: bytes.toString("base64") });
+        this.sent += bytes.length;
+      }
+      if (!readable.readableLength) readable.read(0);
+    };
+    readable.on("readable", this.pump);
+    this.end = () => {
+      this.ended = true;
+      if (this.sent === this.acked) close();
+    };
+    readable.once("end", this.end);
+    this.error = () => close();
+    readable.on("error", this.error);
+    writable.on("error", this.error);
+    this.pump();
+  }
+  message(message) {
+    if (this.done) return;
+    if (message.type === "ssh.ack") {
+      if (!Number.isSafeInteger(message.seq) || message.seq < this.acked || message.seq > this.sent) throw new Error("invalid_ack");
+      this.acked = message.seq;
+      this.pump();
+      if (this.ended && this.sent === this.acked) this.close();
+    } else if (message.type === "ssh.data") {
+      const size = dataSize(message.data);
+      if (message.seq !== this.received || this.received + size - this.delivered > WINDOW) throw new Error("flow_control");
+      this.received += size;
+      const ack = this.received;
+      this.writable.write(Buffer.from(message.data, "base64"), (error) => {
+        if (error) this.close();
+        else if (!this.done) {
+          this.delivered = ack;
+          this.send({ type: "ssh.ack", seq: ack });
+        }
+      });
+    }
+  }
+  stop() {
+    if (this.done) return;
+    this.done = true;
+    this.readable.off("readable", this.pump);
+    this.readable.off("end", this.end);
+    this.readable.off("error", this.error);
+    this.writable.off("error", this.error);
+  }
+};
+
+// service/nanocode.mjs
+import { createHash as createHash2 } from "node:crypto";
+function sshKey(value) {
+  if (typeof value !== "string" || value.length > 200) fail(400, "invalid_ssh_key", "Provide an Ed25519 SSH public key.");
+  const match = /^ssh-ed25519 ([A-Za-z0-9+/]+={0,2})$/.exec(value.trim());
+  if (!match) fail(400, "invalid_ssh_key", "Provide an Ed25519 SSH public key without options or a comment.");
+  const wire = Buffer.from(match[1], "base64");
+  if (wire.length !== 51 || wire.readUInt32BE(0) !== 11 || wire.subarray(4, 15).toString() !== "ssh-ed25519" || wire.readUInt32BE(15) !== 32 || wire.toString("base64") !== match[1]) fail(400, "invalid_ssh_key", "The SSH key is malformed.");
+  return { publicKey: `ssh-ed25519 ${match[1]}`, fingerprint: `SHA256:${createHash2("sha256").update(wire).digest("base64").replace(/=+$/, "")}` };
+}
+
+// device/nanocode-host.mjs
+var quote = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
+var NanocodeHost = class {
+  constructor({ root, client, send, log = () => {
+  } }) {
+    Object.assign(this, { root, client, send, log });
+    this.channels = /* @__PURE__ */ new Map();
+    this.abort = new AbortController();
+    this.dir = path3.join(root, "data/nanocode");
+  }
+  authorize() {
+    return this.authorizing ||= this.readAuthorization().finally(() => {
+      this.authorizing = void 0;
+    });
+  }
+  async readAuthorization() {
+    const config = await readJson(path3.join(this.dir, "config.json"));
+    if (!config?.enabled || config.installId !== this.client.local.installId || config.accountId !== this.client.local.registryAccount?.account_id) throw new Error("code_mode_disabled");
+    if (!Number.isInteger(config.port) || config.port < 1024 || config.port > 65535) throw new Error("invalid_ssh_port");
+    const state = await this.client.request("GET", "/api/v1/nanocode/state", void 0, this.abort.signal);
+    const host = state.devices.find((d) => d.id === this.client.local.deviceId);
+    const hostKey = (await readFile2(path3.join(this.dir, "host_ed25519.pub"), "utf8")).trim().split(/\s+/).slice(0, 2).join(" ");
+    if (!host?.enabled || host.hostKey !== hostKey) throw new Error("code_mode_disabled");
+    const session = path3.join(this.root, "setup/nanocode-session.mjs");
+    const command = `${quote(process.execPath)} ${quote(session)} ${quote(this.root)}`;
+    if (/[\r\n]/.test(command)) throw new Error("invalid_host_path");
+    const escaped = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    if (this.stopped) throw new Error("host_stopped");
+    const lines = state.keys.map((k) => `restrict,pty,command="${escaped}" ${sshKey(k.publicKey).publicKey}`);
+    const tmp = path3.join(this.dir, `authorized_keys.${randomUUID3()}.next`);
+    try {
+      await writeFile(tmp, lines.join("\n") + "\n", { mode: 384, flag: "wx" });
+      if (this.stopped) throw new Error("host_stopped");
+      await rename2(tmp, path3.join(this.dir, "authorized_keys"));
+    } finally {
+      await unlink(tmp).catch((error) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
+    this.config = config;
+    return state;
+  }
+  async ensure() {
+    if (!this.sshd && !this.starting && !this.stopped) {
+      this.starting = true;
+      try {
+        await this.start();
+      } finally {
+        this.starting = false;
+      }
+    }
+  }
+  async start() {
+    try {
+      await this.authorize();
+      if (this.stopped) return;
+      this.sshd = spawn(process.execPath, [path3.join(this.root, "setup/nanocode-daemon.mjs"), this.config.sshd, path3.join(this.dir, "sshd_config")], { stdio: ["pipe", "ignore", "pipe"] });
+      this.sshd.on("error", () => this.disconnect());
+      this.sshd.on("exit", () => {
+        this.sshd = void 0;
+        this.disconnect();
+      });
+      this.sshd.stderr.on("data", () => {
+      });
+      clearInterval(this.timer);
+      this.timer = setInterval(() => void this.refresh(), 15e3);
+    } catch {
+      this.disconnect();
+    }
+  }
+  async refresh() {
+    if (this.refreshing || this.stopped) return;
+    this.refreshing = true;
+    try {
+      const state = await this.authorize();
+      for (const [id, ch] of this.channels) if (!state.keys.some((k) => k.fingerprint === ch.fingerprint && k.deviceId === ch.client)) this.close(id);
+    } catch {
+      this.disconnect();
+      this.sshd?.kill();
+    } finally {
+      this.refreshing = false;
+    }
+  }
+  async message(message) {
+    if (this.stopped || typeof message.id !== "string") return;
+    const id = message.id;
+    if (message.type === "ssh.open") {
+      if (this.channels.has(id) || this.channels.size >= 8) {
+        this.send({ type: "ssh.close", id });
+        return;
+      }
+      const ch = { client: message.client, fingerprint: message.fingerprint };
+      this.channels.set(id, ch);
+      try {
+        const state = await this.authorize();
+        if (!state.keys.some((k) => k.fingerprint === ch.fingerprint && k.deviceId === ch.client)) throw new Error("key_not_authorized");
+        if (this.channels.get(id) !== ch || this.stopped) return;
+        const socket = ch.socket = connect({ host: "127.0.0.1", port: this.config.port });
+        socket.on("error", () => this.close(id));
+        socket.on("close", (hadError) => {
+          if (hadError || !ch.stream) this.close(id);
+          else {
+            ch.stream.end();
+            ch.endTimer = setTimeout(() => this.close(id), 1e4);
+          }
+        });
+        socket.once("connect", () => {
+          if (this.channels.get(id) !== ch) {
+            socket.destroy();
+            return;
+          }
+          this.send({ type: "ssh.ready", id });
+          ch.stream = new SshStream({ readable: socket, writable: socket, send: (frame) => this.send({ ...frame, id }), close: () => this.close(id) });
+        });
+      } catch {
+        this.close(id);
+      }
+    } else if (message.type === "ssh.close") this.close(id);
+    else {
+      try {
+        this.channels.get(id)?.stream?.message(message);
+      } catch {
+        this.close(id);
+      }
+    }
+  }
+  close(id) {
+    const ch = this.channels.get(id);
+    if (!ch) return;
+    this.channels.delete(id);
+    clearTimeout(ch.endTimer);
+    ch.stream?.stop();
+    ch.socket?.destroy();
+    this.send({ type: "ssh.close", id });
+  }
+  disconnect() {
+    for (const id of [...this.channels.keys()]) this.close(id);
+  }
+  stop() {
+    this.stopped = true;
+    this.abort.abort();
+    clearInterval(this.timer);
+    this.disconnect();
+    this.sshd?.kill();
+  }
+};
 
 // device/setup-client.mjs
 var SetupClient = class extends DeviceClient {
@@ -4133,7 +4400,7 @@ var SetupClient = class extends DeviceClient {
         if (error.status === 401) await this.clearToken();
       }
     }
-    const body = { stage, name, reuseEnabled, autoContinue: this.autoContinue, installId: this.local.installId, label: this.label, publicKey: this.local.publicKey, wrappingKey: this.local.wrappingPublicKey };
+    const body = { stage, name, reuseEnabled, autoContinue: this.autoContinue, installId: this.local.installId, label: this.label, publicKey: this.local.publicKey, wrappingKey: this.local.wrappingPublicKey, ...stage === "nanocode" ? { sshPublicKey: this.local.sshPublicKey } : {} };
     try {
       this.flow = await this.request("POST", "/api/v1/setup/start", body);
     } catch (error) {
@@ -4195,6 +4462,7 @@ var SetupClient = class extends DeviceClient {
 export {
   CellConnection,
   DeviceClient,
+  NanocodeHost,
   SetupClient,
   processLock,
   processLockOwner,

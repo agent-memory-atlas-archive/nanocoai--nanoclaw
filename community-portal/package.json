@@ -1,0 +1,33 @@
+{
+  "name": "nanoclaw-community-portal",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "device": "node device/cli.mjs",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "build": "node scripts/build.mjs",
+    "test:e2e": "node --test --test-concurrency=1 test/e2e/*.test.mjs",
+    "celld:install": "node scripts/install-celld.mjs",
+    "demo:use": "node scripts/use-demo.mjs",
+    "demo:account": "node scripts/account-demo.mjs",
+    "test:fleet": "node --test test/e2e/fleet.test.mjs",
+    "test:integration": "node scripts/test-integration.mjs",
+    "build:host": "node scripts/build-host.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1127.0",
+    "@aws-sdk/client-kms": "3.1127.0",
+    "@aws-sdk/client-lambda": "3.1127.0",
+    "@aws-sdk/client-ssm": "3.1127.0",
+    "@aws-sdk/lib-dynamodb": "3.1127.0",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "3.1127.0",
+    "esbuild": "0.25.10"
+  }
+}

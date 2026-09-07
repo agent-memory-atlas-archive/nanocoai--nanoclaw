@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Dial App Icon</title>
+
+  <!-- Rounded square background -->
+  <rect x="0" y="0" width="512" height="512" rx="102" fill="#2C2C2A"/>
+
+  <!-- Logomark scaled and centered -->
+  <circle cx="256" cy="256" r="170" fill="#2C2C2A"/>
+  <circle cx="256" cy="256" r="56" fill="#F1EFE8"/>
+
+  <!-- Top-right arc -->
+  <path d="M256 101 A155 155 0 0 1 411 256" fill="none" stroke="#F1EFE8" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Bottom-left arc -->
+  <path d="M256 411 A155 155 0 0 1 101 256" fill="none" stroke="#F1EFE8" stroke-width="14" stroke-linecap="round"/>
+</svg>

@@ -44,6 +44,8 @@ export class CellConnection {
     origin: string;
     getTicket(signal: AbortSignal): Promise<{ ticket: string; socketUrl: string }>;
     onChange?: () => void;
+    onMessage?: (message: any) => void;
+    onDisconnect?: () => void;
     log?: (event: { event: string; code?: string }) => void;
     heartbeatMs?: number;
     timeoutMs?: number;
@@ -52,5 +54,14 @@ export class CellConnection {
   });
   connected: boolean;
   start(): void;
+  stop(): void;
+  send(frame: any): void;
+}
+
+export class NanocodeHost {
+  constructor(options: {root: string; client: DeviceClient; send(frame: any): void; log?: (event: any) => void});
+  ensure(): Promise<void>;
+  message(message: any): Promise<void>;
+  disconnect(): void;
   stop(): void;
 }
